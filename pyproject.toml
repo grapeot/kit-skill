@@ -1,0 +1,31 @@
+[project]
+name = "kit-skill"
+version = "0.1.0"
+description = "AI-first Kit broadcast publishing CLI skill"
+requires-python = ">=3.11"
+dependencies = [
+  "python-dotenv>=1.0.0",
+  "requests>=2.31.0",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.0.0",
+  "ruff>=0.4,<1",
+]
+
+[project.scripts]
+kit-skill = "kit_skill.cli:main"
+kit-broadcast = "kit_skill.cli:main"
+
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.pytest.ini_options]
+markers = [
+  "live_integration: tests that call the real Kit API and are skipped by default",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
