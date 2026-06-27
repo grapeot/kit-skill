@@ -1,14 +1,14 @@
-# RFC: Kit Broadcast Skill Architecture
+# RFC: Kit Skill Architecture
 
 ## Context
 
-The existing Kit broadcast flow lives in an internal one-off script. It can create a Kit API v4 broadcast from Markdown, but it cannot target a tag and is not packaged as a reusable public skill.
+The existing Kit workflows lived in internal one-off scripts. One path created Kit API v4 broadcasts from Markdown, while another fetched account growth, email stats, subscriber counts, broadcasts, broadcast stats, and sequence metadata.
 
-This project extracts the broadcast functionality into a reusable CLI while keeping legacy workflows stable through compatibility wrappers and explicit migration updates.
+This project extracts both workflows into a reusable CLI while keeping write operations explicitly separate from read-only analytics.
 
 ## Scope
 
-The first version only covers broadcast publishing. Subscriber import, tag creation, form automation, visual automation setup, and custom unsubscribe link setup remain human/Kit UI tasks for now.
+The skill covers broadcast publishing plus read-only analytics. Subscriber import, tag creation, form automation, visual automation setup, custom unsubscribe link setup, and background syncing remain out of scope.
 
 ## CLI Contract
 
@@ -37,6 +37,23 @@ Stats command:
 ```bash
 kit-skill broadcast stats <broadcast_id>
 ```
+
+Read-only analytics commands:
+
+```bash
+kit-skill analytics account
+kit-skill analytics growth [--start-date YYYY-MM-DD] [--end-date YYYY-MM-DD]
+kit-skill analytics email-stats
+kit-skill analytics subscriber-count [--status active]
+kit-skill analytics subscribers [--status active] [--limit 50] [--show-emails]
+kit-skill analytics broadcasts [--limit 10]
+kit-skill analytics broadcast-stats <broadcast_id>
+kit-skill analytics sequences [--limit 50]
+kit-skill analytics sequence <sequence_id> [--include-subscribers] [--show-emails]
+kit-skill analytics snapshot [--start-date YYYY-MM-DD] [--end-date YYYY-MM-DD] [--broadcasts-limit 10] [--output path]
+```
+
+`analytics subscribers` and `analytics sequence --include-subscribers` redact email addresses by default. `--show-emails` is an explicit private-output opt-in.
 
 ## Draft Semantics
 
@@ -75,11 +92,13 @@ The CLI loads `.env` from the current directory and parent directories. Public e
 1. Scaffold public project.
 2. Port legacy Markdown conversion and broadcast creation logic.
 3. Add tag-targeted payload support and draft behavior.
-4. Add offline tests.
-5. Replace old internal script with a compatibility wrapper or update callers to invoke this CLI.
-6. Keep public repo creation and push as an explicit external step.
+4. Port read-only analytics from the legacy metrics script.
+5. Add offline tests.
+6. Replace old internal scripts and docs with direct calls to this CLI.
+7. Keep public repo creation and push as an explicit external step.
 
 ## Open Risks
 
 - Kit link triggers may not fire for API-created broadcasts unless the API HTML preserves whatever tracking metadata Kit expects. This must be tested separately.
 - Kit draft/public/send behavior should be verified with a non-production account or test broadcast before production cutover.
+- Kit API response envelopes are not completely consistent across endpoints; analytics commands should keep tests around envelope unwrapping and count fallbacks.

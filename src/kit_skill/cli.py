@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from datetime import date, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -22,6 +23,37 @@ from .config import (
 
 def print_json(data: Any) -> None:
     print(json.dumps(data, ensure_ascii=False, indent=2))
+
+
+def default_date_range() -> tuple[str, str]:
+    end = date.today()
+    start = end - timedelta(days=14)
+    return start.isoformat(), end.isoformat()
+
+
+def redact_email(value: str | None) -> str | None:
+    if not value or "@" not in value:
+        return value
+    name, domain = value.split("@", 1)
+    if len(name) <= 2:
+        masked = name[:1] + "*"
+    else:
+        masked = name[:2] + "***"
+    return f"{masked}@{domain}"
+
+
+def redact_subscriber_emails(data: Any) -> Any:
+    if isinstance(data, list):
+        return [redact_subscriber_emails(item) for item in data]
+    if not isinstance(data, dict):
+        return data
+    redacted: dict[str, Any] = {}
+    for key, value in data.items():
+        if key in {"email_address", "email"} and isinstance(value, str):
+            redacted[key] = redact_email(value)
+        else:
+            redacted[key] = redact_subscriber_emails(value)
+    return redacted
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -60,6 +92,56 @@ def build_parser() -> argparse.ArgumentParser:
     stats = broadcast_sub.add_parser("stats", help="Get broadcast stats")
     stats.add_argument("broadcast_id", help="Broadcast ID")
     stats.add_argument("--format", choices=["text", "json"], default="text")
+
+    analytics = sub.add_parser("analytics", help="Read-only analytics and subscriber metrics")
+    analytics_sub = analytics.add_subparsers(dest="analytics_cmd", required=True)
+
+    analytics_account = analytics_sub.add_parser("account", help="Show account info")
+    analytics_account.add_argument("--format", choices=["text", "json"], default="json")
+
+    analytics_growth = analytics_sub.add_parser("growth", help="Subscriber growth stats")
+    analytics_growth.add_argument("--start-date", help="Start date (YYYY-MM-DD)")
+    analytics_growth.add_argument("--end-date", help="End date (YYYY-MM-DD)")
+    analytics_growth.add_argument("--format", choices=["text", "json"], default="json")
+
+    analytics_email_stats = analytics_sub.add_parser("email-stats", help="Aggregated open/click stats")
+    analytics_email_stats.add_argument("--format", choices=["text", "json"], default="json")
+
+    subscriber_count = analytics_sub.add_parser("subscriber-count", help="Active subscriber count")
+    subscriber_count.add_argument("--status", default="active")
+    subscriber_count.add_argument("--format", choices=["text", "json"], default="text")
+
+    subscribers = analytics_sub.add_parser("subscribers", help="Subscriber list or count")
+    subscribers.add_argument("--status", default="active")
+    subscribers.add_argument("--limit", type=int, default=50)
+    subscribers.add_argument("--count", action="store_true")
+    subscribers.add_argument("--show-emails", action="store_true", help="Print raw subscriber emails")
+    subscribers.add_argument("--format", choices=["text", "json"], default="json")
+
+    broadcasts = analytics_sub.add_parser("broadcasts", help="List recent broadcasts")
+    broadcasts.add_argument("--limit", type=int, default=10)
+    broadcasts.add_argument("--format", choices=["text", "json"], default="json")
+
+    analytics_broadcast_stats = analytics_sub.add_parser("broadcast-stats", help="Stats for one broadcast")
+    analytics_broadcast_stats.add_argument("broadcast_id", help="Broadcast ID")
+    analytics_broadcast_stats.add_argument("--format", choices=["text", "json"], default="json")
+
+    sequences = analytics_sub.add_parser("sequences", help="List email sequences")
+    sequences.add_argument("--limit", type=int, default=50)
+    sequences.add_argument("--format", choices=["text", "json"], default="json")
+
+    sequence = analytics_sub.add_parser("sequence", help="Show one email sequence")
+    sequence.add_argument("sequence_id", help="Sequence ID")
+    sequence.add_argument("--include-subscribers", action="store_true")
+    sequence.add_argument("--show-emails", action="store_true", help="Print raw subscriber emails")
+    sequence.add_argument("--format", choices=["text", "json"], default="json")
+
+    snapshot = analytics_sub.add_parser("snapshot", help="Fetch growth, email stats, and recent broadcasts")
+    snapshot.add_argument("--start-date", help="Start date (YYYY-MM-DD)")
+    snapshot.add_argument("--end-date", help="End date (YYYY-MM-DD)")
+    snapshot.add_argument("--broadcasts-limit", type=int, default=10)
+    snapshot.add_argument("--output", help="Write JSON output to file")
+    snapshot.add_argument("--format", choices=["text", "json"], default="json")
 
     return parser
 
@@ -170,6 +252,95 @@ def handle_broadcast_stats(args: argparse.Namespace, format_name: str) -> int:
     return 0
 
 
+def handle_analytics(args: argparse.Namespace, format_name: str) -> int:
+    client = build_client()
+    default_start, default_end = default_date_range()
+    start_date = getattr(args, "start_date", None) or default_start
+    end_date = getattr(args, "end_date", None) or default_end
+
+    if args.analytics_cmd == "account":
+        data = client.account()
+    elif args.analytics_cmd == "growth":
+        data = client.growth_stats(start_date, end_date)
+    elif args.analytics_cmd == "email-stats":
+        data = client.email_stats()
+    elif args.analytics_cmd == "subscriber-count":
+        count = client.subscriber_count(status=args.status)
+        data = {"status": args.status, "count": count}
+        if format_name == "text":
+            print(count)
+            return 0
+    elif args.analytics_cmd == "subscribers":
+        if args.count:
+            count = client.subscriber_count(status=args.status)
+            data = {"status": args.status, "count": count}
+            if format_name == "text":
+                print(count)
+                return 0
+        else:
+            data = client.subscribers(status=args.status, per_page=args.limit)
+            if not args.show_emails:
+                data = redact_subscriber_emails(data)
+    elif args.analytics_cmd == "broadcasts":
+        raw = client.broadcasts(per_page=args.limit).get("broadcasts", [])
+        data = [
+            {
+                "id": broadcast.get("id"),
+                "subject": broadcast.get("subject"),
+                "published_at": broadcast.get("published_at"),
+                "recipients": broadcast.get("recipients"),
+            }
+            for broadcast in sorted(raw, key=lambda item: item.get("published_at") or "", reverse=True)
+        ]
+    elif args.analytics_cmd == "broadcast-stats":
+        data = client.broadcast_stats(args.broadcast_id)
+    elif args.analytics_cmd == "sequences":
+        raw = client.sequences(per_page=args.limit).get("sequences", [])
+        data = [
+            {
+                "id": sequence.get("id"),
+                "name": sequence.get("name"),
+                "active": sequence.get("active"),
+                "email_count": sequence.get("email_count"),
+                "subscriber_count": sequence.get("subscriber_count"),
+                "created_at": sequence.get("created_at"),
+            }
+            for sequence in raw
+        ]
+    elif args.analytics_cmd == "sequence":
+        sequence = client.sequence(args.sequence_id)
+        data = {
+            "id": sequence.get("id"),
+            "name": sequence.get("name"),
+            "active": sequence.get("active"),
+            "email_count": sequence.get("email_count"),
+            "subscriber_count": sequence.get("subscriber_count"),
+            "send_hour": sequence.get("send_hour"),
+            "time_zone": sequence.get("time_zone"),
+        }
+        if args.include_subscribers:
+            subscribers = client.sequence_subscribers(args.sequence_id, status="active", per_page=50)
+            data["active_subscribers"] = subscribers.get("subscribers", [])
+            if not args.show_emails:
+                data = redact_subscriber_emails(data)
+    elif args.analytics_cmd == "snapshot":
+        data = client.snapshot(start_date, end_date, broadcasts_limit=args.broadcasts_limit)
+        if args.output:
+            output_path = Path(args.output)
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            output_path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+            print(f"Saved to {output_path}")
+            return 0
+    else:
+        raise ValueError(f"Unknown analytics command: {args.analytics_cmd}")
+
+    if format_name == "json":
+        print_json(data)
+    else:
+        print_json(data)
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -182,6 +353,8 @@ def main(argv: list[str] | None = None) -> int:
             return handle_broadcast_send(args, args.format)
         if args.cmd == "broadcast" and args.broadcast_cmd == "stats":
             return handle_broadcast_stats(args, args.format)
+        if args.cmd == "analytics":
+            return handle_analytics(args, args.format)
         parser.print_help()
         return 1
     except requests.HTTPError as exc:

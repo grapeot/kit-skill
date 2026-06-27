@@ -14,6 +14,10 @@ Coverage goals:
 6. `--draft` payload construction.
 7. `--web-only` payload construction.
 8. CLI dry-run JSON output.
+9. Analytics endpoint selection and query params.
+10. Subscriber-count fallback logic.
+11. Subscriber email redaction in CLI output.
+12. Snapshot enrichment with recent broadcast stats.
 
 Run:
 
@@ -23,9 +27,18 @@ Run:
 
 ## Live Tests
 
-Live tests are skipped unless `KIT_ENABLE_LIVE_TESTS=1` is set. They should use throwaway tags and test subscribers only.
+Live tests are skipped unless `KIT_ENABLE_LIVE_TESTS=1`, `KIT_LIVE_SEQUENCE_ID`, and `KIT_LIVE_TEST_EMAIL` are set. They should use throwaway tags, test subscribers, and fake/non-production audience paths only.
 
-Live tests must not send to a real production audience. Prefer `--draft` and a test tag.
+Live tests must not send to a real production audience. Prefer `--draft`, read-only analytics commands, and a test tag.
+
+Run:
+
+```bash
+KIT_ENABLE_LIVE_TESTS=1 \
+KIT_LIVE_SEQUENCE_ID=123456 \
+KIT_LIVE_TEST_EMAIL=kit-e2e-probe@example.com \
+.venv/bin/python -m pytest -v -m live_integration
+```
 
 ## Manual Migration Tests
 
@@ -36,3 +49,4 @@ Before production cutover, verify manually:
 3. Kit Link Trigger removes the newsletter tag when clicked from a GUI-created email.
 4. Kit Link Trigger removes the newsletter tag when clicked from an API-created broadcast, or the limitation is documented and a signed endpoint fallback is planned.
 5. `--draft` creates a state that does not send email.
+6. `analytics snapshot` returns growth stats, email stats, recent broadcasts, and per-broadcast stats without network writes beyond reads.
