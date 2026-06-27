@@ -27,9 +27,18 @@ Run:
 
 ## Live Tests
 
-Live tests are skipped unless `KIT_ENABLE_LIVE_TESTS=1` is set. They should use throwaway tags, test subscribers, and fake/non-production audience paths only.
+Live tests are skipped unless `KIT_ENABLE_LIVE_TESTS=1`, `KIT_LIVE_SEQUENCE_ID`, and `KIT_LIVE_TEST_EMAIL` are set. They should use throwaway tags, test subscribers, and fake/non-production audience paths only.
 
 Live tests must not send to a real production audience. Prefer `--draft`, read-only analytics commands, and a test tag.
+
+Run:
+
+```bash
+KIT_ENABLE_LIVE_TESTS=1 \
+KIT_LIVE_SEQUENCE_ID=123456 \
+KIT_LIVE_TEST_EMAIL=kit-e2e-probe@example.com \
+.venv/bin/python -m pytest -v -m live_integration
+```
 
 ## Manual Migration Tests
 

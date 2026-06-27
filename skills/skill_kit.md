@@ -83,6 +83,8 @@ Create a web-only backfill:
 
 Subscriber list commands redact emails by default. Use `--show-emails` only when the terminal, log, and output file are private.
 
+`analytics subscriber-count` returns account-wide active subscribers. Do not interpret it as a tag, segment, or newsletter audience count unless the account has only one audience.
+
 ## Boundaries
 
 - Do not create a real broadcast without first reviewing dry-run payload.

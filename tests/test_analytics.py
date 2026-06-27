@@ -193,12 +193,14 @@ def test_redact_email_handles_short_names() -> None:
 
 @pytest.mark.live_integration
 @pytest.mark.skipif(
-    os.getenv("KIT_ENABLE_LIVE_TESTS") != "1",
-    reason="live Kit e2e disabled; set KIT_ENABLE_LIVE_TESTS=1 to enable",
+    os.getenv("KIT_ENABLE_LIVE_TESTS") != "1"
+    or not os.getenv("KIT_LIVE_SEQUENCE_ID")
+    or not os.getenv("KIT_LIVE_TEST_EMAIL"),
+    reason="live Kit e2e disabled; set KIT_ENABLE_LIVE_TESTS=1, KIT_LIVE_SEQUENCE_ID, and KIT_LIVE_TEST_EMAIL",
 )
 def test_live_sequence_accepts_subscriber() -> None:
-    sequence_id = os.getenv("KIT_LIVE_SEQUENCE_ID", "123456")
-    test_email = os.getenv("KIT_LIVE_TEST_EMAIL", "kit-e2e-probe@example.com")
+    sequence_id = os.environ["KIT_LIVE_SEQUENCE_ID"]
+    test_email = os.environ["KIT_LIVE_TEST_EMAIL"]
     client = KitClient(
         api_key=os.environ["KIT_API_KEY"],
         base_url=os.getenv("KIT_BASE_URL", "https://api.kit.com/v4"),

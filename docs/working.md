@@ -9,6 +9,8 @@
 - Kept `broadcast stats` as the existing entry point and added `analytics broadcast-stats` for the read-only analytics group.
 - Added default subscriber email redaction for list-style analytics commands; raw emails require `--show-emails`.
 - Ported Kit sequence and analytics tests into the project test suite.
+- Tightened live test gating so enabling live tests without a real `KIT_LIVE_SEQUENCE_ID` and `KIT_LIVE_TEST_EMAIL` skips instead of calling fake IDs against the real Kit API.
+- Documented that `subscriber-count` is account-wide and should not be read as a tag or newsletter audience size.
 
 ### 2026-06-25
 
