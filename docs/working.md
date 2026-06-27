@@ -2,6 +2,14 @@
 
 ## Changelog
 
+### 2026-06-26
+
+- Migrated legacy Kit analytics capabilities into the reusable `kit-skill` package.
+- Added `kit-skill analytics` commands for account, growth, email stats, subscriber count/list, broadcasts, broadcast stats, sequences, sequence details, and snapshot output.
+- Kept `broadcast stats` as the existing entry point and added `analytics broadcast-stats` for the read-only analytics group.
+- Added default subscriber email redaction for list-style analytics commands; raw emails require `--show-emails`.
+- Ported Kit sequence and analytics tests into the project test suite.
+
 ### 2026-06-25
 
 - Created Kit skill scaffold.

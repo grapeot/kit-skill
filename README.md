@@ -1,6 +1,6 @@
 # Kit Skill
 
-AI-first Kit broadcast publishing from local Markdown files. The CLI supports dry-runs, scheduled sends, draft-only creation, web publishing, web-only backfills, and tag/segment-targeted broadcasts.
+AI-first Kit broadcast publishing and read-only analytics. The CLI supports dry-runs, scheduled sends, draft-only creation, web publishing, web-only backfills, tag/segment-targeted broadcasts, subscriber growth metrics, email stats, broadcast stats, and sequence checks.
 
 This repository is self-contained. It provides a plain Markdown skill contract at `skills/skill_kit.md` plus a Python package and CLI that agents can call.
 
@@ -12,6 +12,7 @@ This repository is self-contained. It provides a plain Markdown skill contract a
 - Target recipients by tag ID or segment ID using Kit `subscriber_filter`.
 - Create draft-only broadcasts without scheduling a send.
 - Publish web-only backfills without email delivery when Kit supports the account behavior.
+- Read Kit account, growth, email, subscriber-count, broadcast, and sequence analytics.
 
 ## Install
 
@@ -76,6 +77,19 @@ Get broadcast stats:
 ```bash
 kit-skill broadcast stats 123456 --format json
 ```
+
+Read analytics:
+
+```bash
+kit-skill analytics growth --start-date 2026-03-01 --end-date 2026-03-14 --format json
+kit-skill analytics email-stats --format json
+kit-skill analytics subscriber-count
+kit-skill analytics broadcasts --limit 10 --format json
+kit-skill analytics broadcast-stats 123456 --format json
+kit-skill analytics snapshot --output /tmp/kit_snapshot.json
+```
+
+Subscriber list commands redact email addresses by default. Pass `--show-emails` only when the output destination is private.
 
 ## Install the Agent Skill
 

@@ -2,9 +2,9 @@
 
 ## Purpose
 
-Use Kit API v4 for agent-controlled broadcast publishing from local Markdown files. This file is the canonical agent contract for this repository.
+Use Kit API v4 for agent-controlled broadcast publishing from local Markdown files and read-only analytics. This file is the canonical agent contract for this repository.
 
-This is a plain Markdown skill document, not a vendor-specific packaged skill format. Agents should read it when the user asks for Kit broadcast creation, draft creation, scheduled send, web-only backfill, or tag/segment-targeted sending.
+This is a plain Markdown skill document, not a vendor-specific packaged skill format. Agents should read it when the user asks for Kit broadcast creation, draft creation, scheduled send, web-only backfill, tag/segment-targeted sending, subscriber growth, email stats, broadcast stats, or sequence checks.
 
 ## Project Setup
 
@@ -70,6 +70,19 @@ Create a web-only backfill:
 .venv/bin/python -m kit_skill.cli broadcast stats 123456 --format json
 ```
 
+## Read-Only Analytics
+
+```bash
+.venv/bin/python -m kit_skill.cli analytics growth --start-date 2026-03-01 --end-date 2026-03-14 --format json
+.venv/bin/python -m kit_skill.cli analytics email-stats --format json
+.venv/bin/python -m kit_skill.cli analytics subscriber-count
+.venv/bin/python -m kit_skill.cli analytics broadcasts --limit 10 --format json
+.venv/bin/python -m kit_skill.cli analytics broadcast-stats 123456 --format json
+.venv/bin/python -m kit_skill.cli analytics snapshot --output /tmp/kit_snapshot.json
+```
+
+Subscriber list commands redact emails by default. Use `--show-emails` only when the terminal, log, and output file are private.
+
 ## Boundaries
 
 - Do not create a real broadcast without first reviewing dry-run payload.
@@ -77,3 +90,5 @@ Create a web-only backfill:
 - Do not manage products, purchases, payments, or commerce in this skill.
 - Do not build subscriber import or preference-center behavior into the first version.
 - Treat Kit default unsubscribe and topic-level Link Trigger opt-out as separate product semantics.
+- Keep analytics commands read-only except for explicit live e2e sequence tests.
+- Do not print raw subscriber emails unless the user explicitly asks and the output destination is private.
