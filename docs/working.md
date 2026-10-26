@@ -10,6 +10,7 @@
 - Added `.gitignore` coverage for `.local/` with attempt logs under `.local/subscription_actions/` (exclusive create, 0600 files, 0700 directory, no PII in filenames); sanitized HTTP/transport error output for the new commands only (no raw bodies or query-string URLs).
 - Extended `KitClient` with `find_subscribers_by_email`, `get_subscriber`, `unsubscribe_subscriber` (validates 204 explicitly), and `filter_subscribers`; `_post` now supports query params.
 - Design record: independent design review with 5 must-fix items integrated (working document; not committed to the repository).
+- Privacy review round 1: scrubbed account-style tag strings from public docs/tests in favor of `example:*`, removed the production tag default from `bounce-hygiene` (`--tag` now required), reduced sanitized HTTP error output to status codes only (including the generic CLI fallback), added input-privacy notes for shell history/process arguments, and removed subscriber IDs from attempt-log filenames.
 
 ### 2026-06-26
 

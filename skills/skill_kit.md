@@ -92,7 +92,7 @@ Use Analytics mode for read-only Kit state. These commands do not create broadca
 .venv/bin/python -m kit_skill.cli analytics growth --start-date 2026-03-01 --end-date 2026-03-14 --format json
 .venv/bin/python -m kit_skill.cli analytics email-stats --format json
 .venv/bin/python -m kit_skill.cli analytics subscriber-count
-.venv/bin/python -m kit_skill.cli analytics subscriber-count --tag "audience:share"
+.venv/bin/python -m kit_skill.cli analytics subscriber-count --tag "example:newsletter"
 .venv/bin/python -m kit_skill.cli analytics tags --format json
 .venv/bin/python -m kit_skill.cli analytics broadcasts --limit 10 --format json
 .venv/bin/python -m kit_skill.cli analytics broadcast-stats 123456 --format json
@@ -117,6 +117,8 @@ Single-address consent mutations:
 ```
 
 `subscribers unsubscribe` defaults to dry-run. The flow resolves the subscriber by exact email, re-reads the current record by ID, and only `active` subscribers proceed to the POST when `--execute` is passed; `cancelled` reports `already_cancelled`, other known states report `skipped_non_active`, and the command exits 0 on these without writing. The unconfirmed-write outcomes (`write_succeeded_verification_failed`, `write_outcome_unknown`) exit 1 and are never retried automatically. Attempt logs land in `<repo>/.local/subscription_actions/` with no PII in filenames. Unsubscribing affects all future sends on the account, not just a tag.
+
+Input privacy: the positional email goes into shell history, process arguments, and agent invocation logs; output masking does not sanitize those records. Attempt-log bodies contain the full email and subscriber ID — keep them in private run context and never paste them into public reports.
 
 ## Boundaries
 

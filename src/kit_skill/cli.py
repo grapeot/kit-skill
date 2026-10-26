@@ -109,7 +109,7 @@ def create_attempt_log(subscriber_id: int | str, email: str) -> Path:
         indent=2,
     )
     for _ in range(3):
-        path = log_dir / f"{stamp}-{uuid.uuid4().hex[:8]}-{subscriber_id}.json"
+        path = log_dir / f"{stamp}-{uuid.uuid4().hex[:12]}.json"
         try:
             fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
         except FileExistsError:
@@ -135,18 +135,8 @@ def update_attempt_log(path: Path | None, record: dict[str, Any]) -> bool:
 
 
 def print_sanitized_http_error(exc: requests.HTTPError) -> None:
-    response = exc.response
-    status = response.status_code if response is not None else None
-    errors: Any = None
-    if response is not None and response.text:
-        try:
-            errors = json.loads(response.text).get("errors")
-        except ValueError:
-            errors = None
-    line = f"HTTP {status}" if status else "HTTP error"
-    if errors:
-        line += f": {json.dumps(errors, ensure_ascii=False)}"
-    print(line, file=sys.stderr)
+    status = exc.response.status_code if exc.response is not None else None
+    print(f"HTTP {status}" if status else "HTTP error", file=sys.stderr)
 
 
 def print_sanitized_transport_error(exc: requests.RequestException) -> None:
@@ -250,7 +240,7 @@ def build_parser() -> argparse.ArgumentParser:
         "bounce-hygiene",
         help="Find members of a tag with high account-level bounce counts in a stats window",
     )
-    hygiene.add_argument("--tag", default="audience:share", help="Tag name or numeric id to scan")
+    hygiene.add_argument("--tag", required=True, help="Tag name or numeric id to scan")
     hygiene.add_argument("--since", required=True, help="Stats window start (YYYY-MM-DD, inclusive of retention rules)")
     hygiene.add_argument("--until", help="Stats window end (YYYY-MM-DD); defaults to today")
     hygiene.add_argument("--min-bounced", type=int, default=3, help="Candidate threshold on bounced count")
@@ -617,20 +607,29 @@ def handle_analytics_bounce_hygiene(args: argparse.Namespace, format_name: str) 
         }
         candidates: list[dict[str, Any]] = []
         scanned: int | None = None
+        seen = 0
         after: str | None = None
         while True:
             data = client.filter_subscribers(payload, per_page=per_page, after=after)
+            page_rows = data.get("subscribers", [])
+            seen += len(page_rows)
             if scanned is None:
-                scanned = (data.get("pagination") or {}).get("total_count")
-            for row in data.get("subscribers", []):
+                total = (data.get("pagination") or {}).get("total_count")
+                if isinstance(total, int):
+                    scanned = total
+            for row in page_rows:
                 stats = row.get("stats")
                 if not isinstance(stats, dict):
                     print("Subscriber stats missing in filter response; scan aborted", file=sys.stderr)
                     return 1
-                bounced = int(stats.get("bounced") or 0)
+                try:
+                    bounced = int(stats.get("bounced") or 0)
+                    sent = int(stats.get("sent") or 0)
+                except (TypeError, ValueError):
+                    print("Invalid stats value in filter response; scan aborted", file=sys.stderr)
+                    return 1
                 if bounced < int(args.min_bounced):
                     continue
-                sent = int(stats.get("sent") or 0)
                 candidates.append(
                     {
                         "email_address": row.get("email_address")
@@ -660,6 +659,8 @@ def handle_analytics_bounce_hygiene(args: argparse.Namespace, format_name: str) 
         print("Scan incomplete; treating result as unreliable", file=sys.stderr)
         return 1
     candidates.sort(key=lambda item: item["bounced"], reverse=True)
+    if scanned is None:
+        scanned = seen
     output = {
         "tag": tag_input,
         "requested_states": ["active"],
@@ -796,14 +797,10 @@ def main(argv: list[str] | None = None) -> int:
         parser.print_help()
         return 1
     except requests.HTTPError as exc:
-        response = exc.response
-        if response is not None:
-            print(f"HTTP {response.status_code}: {response.text}", file=sys.stderr)
-        else:
-            print(f"HTTP error: {exc}", file=sys.stderr)
+        print_sanitized_http_error(exc)
         return 1
     except requests.RequestException as exc:
-        print(f"Request failed: {exc}", file=sys.stderr)
+        print_sanitized_transport_error(exc)
         return 1
     except ValueError as exc:
         print(str(exc), file=sys.stderr)

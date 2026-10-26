@@ -249,9 +249,11 @@ def test_unsubscribe_execute_confirmed(monkeypatch, capsys, tmp_path) -> None:
     assert stat.S_IMODE(log_path.stat().st_mode) == 0o600
     assert stat.S_IMODE(tmp_path.stat().st_mode) == 0o700
     assert EMAIL not in log_path.name
+    assert "404" not in log_path.name
     record = json.loads(log_path.read_text(encoding="utf-8"))
     assert record["outcome"] == "confirmed_cancelled"
     assert record["phase"] == "pre_write"
+    assert record["subscriber_id"] == 404
 
 
 def test_unsubscribe_execute_204_but_readback_fails(monkeypatch, capsys, tmp_path) -> None:
@@ -449,7 +451,7 @@ def test_hygiene_unknown_tag_exits_two(monkeypatch, capsys) -> None:
     _env(monkeypatch)
 
     def fake_get(url, headers=None, params=None, timeout=None):
-        return _FakeResponse(json_data={"tags": [{"id": 5, "name": "audience:main"}]})
+        return _FakeResponse(json_data={"tags": [{"id": 5, "name": "example:main"}]})
 
     monkeypatch.setattr(requests, "get", fake_get)
 

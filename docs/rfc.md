@@ -69,7 +69,8 @@ kit-skill subscribers unsubscribe <email> [--execute]
 - `--execute` creates a pre-write attempt log under `.local/subscription_actions/` (directory 0700, file exclusive-created 0600, filename without PII), refuses to write if that fails, then calls `POST /v4/subscribers/{id}/unsubscribe` and requires HTTP 204 as the only confirmed success signal. The read-back after 204 must report `state=cancelled`; any other read-back is reported as write-succeeded-but-unverified, and the flow never auto-retries the POST.
 - Outcome field values: `dry_run`, `not_found`, `ambiguous`, `already_cancelled`, `skipped_non_active`, `confirmed_cancelled`, `write_succeeded_verification_failed`, `write_outcome_unknown`, `error`. Exit codes: 0 dry-run/expected skip/confirmed; 1 operational failure or unconfirmed write; 2 argument errors.
 - Unsubscribing applies to all future sends on the account, not just a tag. It is consent-revoking and effectively permanent; resubscription is not provided.
-- Error output is sanitized: status code, endpoint, and Kit's `errors` array only; response bodies and query-string URLs are not echoed raw.
+- Inputs are private context: the positional email reaches shell history, process arguments, and agent logs, which are not sanitized by output masking; attempt-log bodies contain the full email and Kit subscriber ID, so never paste them into public issues, fixtures, or commits.
+- Error output is sanitized: status code only; response bodies and query-string URLs are not echoed, including in the generic CLI fallback.
 
 ## Bounce Hygiene Scan
 
@@ -79,8 +80,10 @@ Read-only scan of tag members with high account-level bounce counts:
 kit-skill analytics bounce-hygiene --tag <name|id> --since YYYY-MM-DD [--until YYYY-MM-DD] [--min-bounced 3]
 ```
 
-- Request shape: `POST /v4/subscribers/filter` with `all=[{subscriber_state: [active]}, {tags: any ids match}]` and `include=[{stats, range}]`, cursor-paginated via `per_page`/`after` query params (page size default 500, max 1000). The `after` query-parameter support for this endpoint is verified with a small two-page read-only probe before trusted use.
+- Request shape: `POST /v4/subscribers/filter` with `all=[{subscriber_state: [active]}, {tags: any ids match}]` and `include=[{stats, range}]`, cursor-paginated via `per_page`/`after` query params (page size default 500, max 1000). The `after` query-parameter support for this endpoint must be verified with a small two-page read-only probe before relying on pagination; a live observation is operator history, not a platform guarantee.
+- `scanned` reports the first page's `total_count` when the server provides it, otherwise the cumulative number of rows seen; document which one you are reading.
 - Output embeds each member's account-level stats (broadcasts, sequences, and templates combined) for the requested window; it is not attributable to the tag alone and is not a hard-bounce verdict. Rows missing `stats` abort the scan. 429 or pagination failures exit nonzero with a scan-incomplete declaration.
+- Inputs are private context: command arguments carry real subscriber emails into shell history, process arguments, and agent invocation logs; default output masking does not sanitize these records, so treat them as private-run artifacts and never paste them into public reports.
 - Emails are redacted by default; `--show-emails` is a private-output opt-in.
 
 ## Draft Semantics
