@@ -70,9 +70,14 @@ def validate_single_email(value: str) -> str:
     return stripped
 
 
+class PaginationError(Exception):
+    pass
+
+
 def locate_subscriber_by_email(client: KitClient, email: str) -> list[dict[str, Any]]:
     matches: list[dict[str, Any]] = []
     after: str | None = None
+    seen_cursors: set[str] = set()
     while True:
         data = client.find_subscribers_by_email(email, after=after)
         for row in data.get("subscribers", []):
@@ -84,8 +89,9 @@ def locate_subscriber_by_email(client: KitClient, email: str) -> list[dict[str, 
         if not pagination.get("has_next_page"):
             return matches
         cursor = pagination.get("end_cursor")
-        if not cursor:
-            return matches
+        if not cursor or str(cursor) in seen_cursors:
+            raise PaginationError("pagination ended without a fresh cursor; results may be incomplete")
+        seen_cursors.add(str(cursor))
         after = cursor
 
 
@@ -377,6 +383,9 @@ def handle_broadcast_stats(args: argparse.Namespace, format_name: str) -> int:
 def _resolved_subscriber(client: KitClient, email: str, format_name: str) -> tuple[dict[str, Any] | None, int]:
     try:
         matches = locate_subscriber_by_email(client, email)
+    except PaginationError as exc:
+        print(f"Locate incomplete: {exc}", file=sys.stderr)
+        return None, 1
     except requests.HTTPError as exc:
         print_sanitized_http_error(exc)
         return None, 1
@@ -386,7 +395,7 @@ def _resolved_subscriber(client: KitClient, email: str, format_name: str) -> tup
     if len(matches) != 1:
         outcome = "not_found" if not matches else "ambiguous"
         print_json({"outcome": outcome, "email_address": redact_email(email)})
-        return None, 1
+        return None, 0
     return matches[0], 0
 
 
@@ -430,11 +439,17 @@ def handle_subscribers_show(args: argparse.Namespace, format_name: str) -> int:
     row, code = _resolved_subscriber(client, email, format_name)
     if row is None:
         return code
+    fresh = _fresh_subscriber(client, row.get("id"))
+    if not isinstance(fresh, dict):
+        return 1
+    if str(fresh.get("id")) != str(row.get("id")) or str(fresh.get("email_address", "")).lower() != email.lower():
+        print("Located subscriber identity mismatch on consistent re-read; aborting", file=sys.stderr)
+        return 1
     data = {
-        "id": row.get("id"),
-        "state": row.get("state"),
-        "created_at": row.get("created_at"),
-        "email_address": row.get("email_address") if args.show_emails else redact_email(row.get("email_address")),
+        "id": fresh.get("id"),
+        "state": fresh.get("state"),
+        "created_at": fresh.get("created_at"),
+        "email_address": fresh.get("email_address") if args.show_emails else redact_email(fresh.get("email_address")),
     }
     print_json(data)
     return 0
@@ -495,28 +510,36 @@ def handle_subscribers_unsubscribe(args: argparse.Namespace, format_name: str) -
     try:
         status = client.unsubscribe_subscriber(subscriber_id)
     except requests.RequestException as exc:
-        update_attempt_log(attempt_path, {"outcome": "write_outcome_unknown", "error": type(exc).__name__})
+        audit_ok = update_attempt_log(attempt_path, {"outcome": "write_outcome_unknown", "error": type(exc).__name__})
         print_sanitized_transport_error(exc)
         print_json(
             _outcome_record(
                 email,
                 fresh,
                 "write_outcome_unknown",
-                {"error": type(exc).__name__, "attempt_log": str(attempt_path)},
+                {"error": type(exc).__name__, "attempt_log": str(attempt_path), "attempt_log_status": "updated" if audit_ok else "update_failed"},
                 show_email=show_email,
             )
         )
         return 1
     if status != 204:
-        update_attempt_log(attempt_path, {"outcome": "write_outcome_unknown", "http_status": status})
+        audit_ok = update_attempt_log(attempt_path, {"outcome": "write_outcome_unknown", "http_status": status})
         print(
             f"Unsubscribe returned HTTP {status} instead of 204; outcome unknown", file=sys.stderr
         )
-        print_json(_outcome_record(email, fresh, "write_outcome_unknown", {"http_status": status}, show_email=show_email))
+        print_json(
+            _outcome_record(
+                email,
+                fresh,
+                "write_outcome_unknown",
+                {"http_status": status, "attempt_log": str(attempt_path), "attempt_log_status": "updated" if audit_ok else "update_failed"},
+                show_email=show_email,
+            )
+        )
         return 1
     after = _fresh_subscriber(client, subscriber_id)
     if not isinstance(after, dict):
-        update_attempt_log(
+        audit_ok = update_attempt_log(
             attempt_path,
             {"outcome": "write_succeeded_verification_failed", "http_status": status},
         )
@@ -526,14 +549,14 @@ def handle_subscribers_unsubscribe(args: argparse.Namespace, format_name: str) -
                 email,
                 fresh,
                 "write_succeeded_verification_failed",
-                {"http_status": status, "attempt_log": str(attempt_path)},
+                {"http_status": status, "attempt_log": str(attempt_path), "attempt_log_status": "updated" if audit_ok else "update_failed"},
                 show_email=show_email,
             )
         )
         return 1
     after_state = after.get("state")
     if after_state == "cancelled":
-        update_attempt_log(
+        audit_ok = update_attempt_log(
             attempt_path,
             {
                 "outcome": "confirmed_cancelled",
@@ -553,12 +576,13 @@ def handle_subscribers_unsubscribe(args: argparse.Namespace, format_name: str) -
                     "state_after": after_state,
                     "http_status": status,
                     "attempt_log": str(attempt_path),
+                    "attempt_log_status": "updated" if audit_ok else "update_failed",
                 },
                 show_email=show_email,
             )
         )
         return 0
-    update_attempt_log(
+    audit_ok = update_attempt_log(
         attempt_path,
         {"outcome": "write_succeeded_verification_failed", "http_status": status, "state_after": after_state},
     )
@@ -568,7 +592,12 @@ def handle_subscribers_unsubscribe(args: argparse.Namespace, format_name: str) -
             email,
             after,
             "write_succeeded_verification_failed",
-            {"http_status": status, "state_after": after_state},
+            {
+                "http_status": status,
+                "state_after": after_state,
+                "attempt_log": str(attempt_path),
+                "attempt_log_status": "updated" if audit_ok else "update_failed",
+            },
             show_email=show_email,
         )
     )
@@ -589,13 +618,20 @@ def handle_analytics_bounce_hygiene(args: argparse.Namespace, format_name: str) 
     client = build_client()
     tag_input = str(args.tag)
     try:
-        tag_id = int(tag_input) if tag_input.isdigit() else None
-        if tag_id is None:
-            tag = client.find_tag(tag_input)
-            if tag is None or tag.get("id") is None:
-                print(f"Tag not found: {tag_input!r}", file=sys.stderr)
+        tag_id: int | str
+        if tag_input.isdigit():
+            tag_id = int(tag_input)
+        else:
+            tags_data = client.list_tags()
+            matching = [
+                tag
+                for tag in tags_data.get("tags", [])
+                if str(tag.get("name", "")).lower() == tag_input.lower() and tag.get("id") is not None
+            ]
+            if len(matching) != 1:
+                print(f"Tag not found or ambiguous: {tag_input!r}", file=sys.stderr)
                 return 2
-            tag_id = tag["id"]
+            tag_id = matching[0]["id"]
         payload = {
             "all": [
                 {"type": "subscriber_state", "states": ["active"]},
@@ -609,6 +645,7 @@ def handle_analytics_bounce_hygiene(args: argparse.Namespace, format_name: str) 
         scanned: int | None = None
         seen = 0
         after: str | None = None
+        seen_cursors: set[str] = set()
         while True:
             data = client.filter_subscribers(payload, per_page=per_page, after=after)
             page_rows = data.get("subscribers", [])
@@ -625,6 +662,8 @@ def handle_analytics_bounce_hygiene(args: argparse.Namespace, format_name: str) 
                 try:
                     bounced = int(stats.get("bounced") or 0)
                     sent = int(stats.get("sent") or 0)
+                    opened = int(stats.get("opened") or 0)
+                    clicked = int(stats.get("clicked") or 0)
                 except (TypeError, ValueError):
                     print("Invalid stats value in filter response; scan aborted", file=sys.stderr)
                     return 1
@@ -632,24 +671,32 @@ def handle_analytics_bounce_hygiene(args: argparse.Namespace, format_name: str) 
                     continue
                 candidates.append(
                     {
+                        "id": row.get("id"),
+                        "created_at": row.get("created_at"),
                         "email_address": row.get("email_address")
                         if args.show_emails
                         else redact_email(row.get("email_address")),
-                        "id": row.get("id"),
-                        "created_at": row.get("created_at"),
-                        "bounced": bounced,
-                        "sent": sent,
+                        "stats": {
+                            "sent": sent,
+                            "opened": opened,
+                            "clicked": clicked,
+                            "bounced": bounced,
+                            "last_sent": stats.get("last_sent"),
+                        },
                         "bounce_ratio": (bounced / sent) if sent else None,
-                        "last_sent": stats.get("last_sent"),
                     }
                 )
             pagination = data.get("pagination") or {}
             if not pagination.get("has_next_page"):
                 break
             cursor = pagination.get("end_cursor")
-            if not cursor:
-                break
+            if not cursor or str(cursor) in seen_cursors:
+                raise PaginationError("pagination ended without a fresh cursor; scan is incomplete")
+            seen_cursors.add(str(cursor))
             after = cursor
+    except PaginationError as exc:
+        print(f"Scan incomplete: {exc}", file=sys.stderr)
+        return 1
     except requests.HTTPError as exc:
         print_sanitized_http_error(exc)
         print("Scan incomplete; treating result as unreliable", file=sys.stderr)
@@ -658,7 +705,7 @@ def handle_analytics_bounce_hygiene(args: argparse.Namespace, format_name: str) 
         print_sanitized_transport_error(exc)
         print("Scan incomplete; treating result as unreliable", file=sys.stderr)
         return 1
-    candidates.sort(key=lambda item: item["bounced"], reverse=True)
+    candidates.sort(key=lambda item: item["stats"]["bounced"], reverse=True)
     if scanned is None:
         scanned = seen
     output = {
