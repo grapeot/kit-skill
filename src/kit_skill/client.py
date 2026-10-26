@@ -85,6 +85,30 @@ class KitClient:
             return int(total)
         return len(data.get("subscribers", []))
 
+    def find_tag(self, name: str) -> dict[str, Any] | None:
+        for tag in self.list_tags().get("tags", []):
+            if tag.get("name") == name:
+                return tag
+        return None
+
+    def tag_subscriber_count(self, tag: int | str, status: str = "active") -> int:
+        if isinstance(tag, str) and not tag.isdigit():
+            found = self.find_tag(tag)
+            if found is None:
+                raise ValueError(f"Tag not found: {tag!r}")
+            tag_id: int | str = found["id"]
+        else:
+            tag_id = tag
+        data = self._get(
+            f"/tags/{tag_id}/subscribers",
+            params={"status": status, "include_total_count": "true", "per_page": 1},
+        )
+        pagination = data.get("pagination") or data.get("meta") or {}
+        total = pagination.get("total_count")
+        if total is not None:
+            return int(total)
+        return len(data.get("subscribers", []))
+
     def broadcasts(self, per_page: int = 10) -> dict[str, Any]:
         return self._get("/broadcasts", params={"per_page": per_page, "sort_order": "desc"})
 

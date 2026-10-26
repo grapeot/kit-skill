@@ -167,6 +167,87 @@ def test_analytics_subscriber_count_text(monkeypatch, capsys) -> None:
     assert capsys.readouterr().out.strip() == "12"
 
 
+def test_tag_subscriber_count_resolves_name(monkeypatch) -> None:
+    captured = {}
+
+    def fake_get(url, headers=None, params=None, timeout=None):
+        captured.setdefault("urls", []).append(url)
+        if url.endswith("/tags"):
+            return _FakeResponse(
+                json_data={"tags": [{"id": 5, "name": "audience:share"}, {"id": 6, "name": "audience:main"}]}
+            )
+        captured["params"] = params
+        return _FakeResponse(json_data={"pagination": {"total_count": 1287}, "subscribers": []})
+
+    monkeypatch.setattr(requests, "get", fake_get)
+
+    assert _client().tag_subscriber_count("audience:share") == 1287
+    assert captured["urls"][-1].endswith("/tags/5/subscribers")
+    assert captured["params"]["include_total_count"] == "true"
+
+
+def test_tag_subscriber_count_accepts_numeric_id(monkeypatch) -> None:
+    captured = {}
+
+    def fake_get(url, headers=None, params=None, timeout=None):
+        captured.setdefault("urls", []).append(url)
+        return _FakeResponse(json_data={"pagination": {"total_count": 7}, "subscribers": []})
+
+    monkeypatch.setattr(requests, "get", fake_get)
+
+    assert _client().tag_subscriber_count("5") == 7
+    # Numeric id skips the tag-list lookup entirely.
+    assert captured["urls"] == ["https://api.kit.test/v4/tags/5/subscribers"]
+
+
+def test_tag_subscriber_count_unknown_tag_raises(monkeypatch) -> None:
+    def fake_get(url, headers=None, params=None, timeout=None):
+        return _FakeResponse(json_data={"tags": [{"id": 6, "name": "audience:main"}]})
+
+    monkeypatch.setattr(requests, "get", fake_get)
+
+    with pytest.raises(ValueError, match="audience:share"):
+        _client().tag_subscriber_count("audience:share")
+
+
+def test_analytics_subscriber_count_tag_text(monkeypatch, capsys) -> None:
+    monkeypatch.setenv("KIT_API_KEY", "test-key")
+
+    def fake_get(url, headers=None, params=None, timeout=None):
+        if url.endswith("/tags"):
+            return _FakeResponse(json_data={"tags": [{"id": 5, "name": "audience:share"}]})
+        return _FakeResponse(json_data={"pagination": {"total_count": 1287}, "subscribers": []})
+
+    monkeypatch.setattr(requests, "get", fake_get)
+
+    code = main(["analytics", "subscriber-count", "--tag", "audience:share"])
+
+    assert code == 0
+    assert capsys.readouterr().out.strip() == "1287"
+
+
+def test_analytics_tags_lists_names(monkeypatch, capsys) -> None:
+    monkeypatch.setenv("KIT_API_KEY", "test-key")
+
+    def fake_get(url, headers=None, params=None, timeout=None):
+        return _FakeResponse(
+            json_data={
+                "tags": [
+                    {"id": 5, "name": "audience:share", "created_at": "2026-06-25T17:55:48Z"},
+                    {"id": 6, "name": "audience:main", "created_at": "2026-06-25T17:55:56Z"},
+                ]
+            }
+        )
+
+    monkeypatch.setattr(requests, "get", fake_get)
+
+    code = main(["analytics", "tags", "--format", "json"])
+
+    assert code == 0
+    out = json.loads(capsys.readouterr().out)
+    assert [tag["name"] for tag in out] == ["audience:share", "audience:main"]
+
+
 def test_snapshot_enriches_recent_broadcasts(monkeypatch) -> None:
     def fake_get(url, headers=None, params=None, timeout=None):
         if url.endswith("/account/growth_stats"):

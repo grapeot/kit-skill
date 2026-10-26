@@ -109,7 +109,13 @@ def build_parser() -> argparse.ArgumentParser:
 
     subscriber_count = analytics_sub.add_parser("subscriber-count", help="Active subscriber count")
     subscriber_count.add_argument("--status", default="active")
+    subscriber_count.add_argument(
+        "--tag", help="Count subscribers with this tag name or id instead of the whole account"
+    )
     subscriber_count.add_argument("--format", choices=["text", "json"], default="text")
+
+    tags = analytics_sub.add_parser("tags", help="List tags")
+    tags.add_argument("--format", choices=["text", "json"], default="text")
 
     subscribers = analytics_sub.add_parser("subscribers", help="Subscriber list or count")
     subscribers.add_argument("--status", default="active")
@@ -265,11 +271,21 @@ def handle_analytics(args: argparse.Namespace, format_name: str) -> int:
     elif args.analytics_cmd == "email-stats":
         data = client.email_stats()
     elif args.analytics_cmd == "subscriber-count":
-        count = client.subscriber_count(status=args.status)
-        data = {"status": args.status, "count": count}
+        if args.tag:
+            count = client.tag_subscriber_count(args.tag, status=args.status)
+            data = {"tag": args.tag, "status": args.status, "count": count}
+        else:
+            count = client.subscriber_count(status=args.status)
+            data = {"status": args.status, "count": count}
         if format_name == "text":
             print(count)
             return 0
+    elif args.analytics_cmd == "tags":
+        raw = client.list_tags().get("tags", [])
+        data = [
+            {"id": tag.get("id"), "name": tag.get("name"), "created_at": tag.get("created_at")}
+            for tag in raw
+        ]
     elif args.analytics_cmd == "subscribers":
         if args.count:
             count = client.subscriber_count(status=args.status)

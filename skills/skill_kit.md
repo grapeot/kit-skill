@@ -91,6 +91,8 @@ Use Analytics mode for read-only Kit state. These commands do not create broadca
 .venv/bin/python -m kit_skill.cli analytics growth --start-date 2026-03-01 --end-date 2026-03-14 --format json
 .venv/bin/python -m kit_skill.cli analytics email-stats --format json
 .venv/bin/python -m kit_skill.cli analytics subscriber-count
+.venv/bin/python -m kit_skill.cli analytics subscriber-count --tag "audience:share"
+.venv/bin/python -m kit_skill.cli analytics tags --format json
 .venv/bin/python -m kit_skill.cli analytics broadcasts --limit 10 --format json
 .venv/bin/python -m kit_skill.cli analytics broadcast-stats 123456 --format json
 .venv/bin/python -m kit_skill.cli analytics snapshot --output /tmp/kit_snapshot.json
@@ -98,7 +100,7 @@ Use Analytics mode for read-only Kit state. These commands do not create broadca
 
 Subscriber list commands redact emails by default. Use `--show-emails` only when the terminal, log, and output file are private.
 
-`analytics subscriber-count` returns account-wide active subscribers. Do not interpret it as a tag, segment, or newsletter audience count unless the account has only one audience.
+`analytics subscriber-count` returns account-wide active subscribers. Do not interpret it as a tag, segment, or newsletter audience count unless the account has only one audience. For a per-audience count, pass `--tag` with a tag name or numeric id; use `analytics tags` to discover tag names. An unknown tag name exits 1 with `Tag not found`.
 
 ## Boundaries
 
