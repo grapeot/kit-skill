@@ -2,6 +2,15 @@
 
 ## Changelog
 
+### 2026-10-26
+
+- Committed previously unimplemented-but-documented analytics features: `analytics subscriber-count --tag`, `analytics tags`, `find_tag`, and `tag_subscriber_count`, with their existing tests.
+- Added `subscribers show` and `subscribers unsubscribe` (single-address consent mutation, dry-run default, `--execute` gate) backed by fresh ID re-reads; outcomes separate confirmed, succeeded-unverified, and unknown write states.
+- Added read-only `analytics bounce-hygiene`: one-tag `POST /v4/subscribers/filter` scan with embedded account-level stats, cursor pagination via `per_page`/`after` query params, client-side bounce thresholds, null-safe ratios, and missing-stats aborts.
+- Added `.gitignore` coverage for `.local/` with attempt logs under `.local/subscription_actions/` (exclusive create, 0600 files, 0700 directory, no PII in filenames); sanitized HTTP/transport error output for the new commands only (no raw bodies or query-string URLs).
+- Extended `KitClient` with `find_subscribers_by_email`, `get_subscriber`, `unsubscribe_subscriber` (validates 204 explicitly), and `filter_subscribers`; `_post` now supports query params.
+- Design record: independent design review with 5 must-fix items integrated (working document; not committed to the repository).
+
 ### 2026-06-26
 
 - Migrated legacy Kit analytics capabilities into the reusable `kit-skill` package.

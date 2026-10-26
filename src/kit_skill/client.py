@@ -35,11 +35,17 @@ class KitClient:
             return {}
         return response.json()
 
-    def _post(self, path: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+    def _post(
+        self,
+        path: str,
+        payload: dict[str, Any] | None = None,
+        params: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         response = requests.post(
             f"{self.base_url}{path}",
             headers=self._headers(),
             json=payload or {},
+            params=params,
             timeout=self.timeout,
         )
         if response.status_code == 429:
@@ -134,6 +140,44 @@ class KitClient:
 
     def create_subscriber(self, email_address: str) -> dict[str, Any]:
         return self._post("/subscribers", payload={"email_address": email_address})
+
+    def find_subscribers_by_email(
+        self, email_address: str, after: str | None = None
+    ) -> dict[str, Any]:
+        params: dict[str, Any] = {"email_address": email_address, "status": "all"}
+        if after:
+            params["after"] = after
+        return self._get("/subscribers", params=params)
+
+    def get_subscriber(self, subscriber_id: int | str) -> dict[str, Any]:
+        data = self._get(f"/subscribers/{subscriber_id}")
+        return data.get("subscriber", data)
+
+    def unsubscribe_subscriber(self, subscriber_id: int | str) -> int:
+        response = requests.post(
+            f"{self.base_url}/subscribers/{subscriber_id}/unsubscribe",
+            headers=self._headers(),
+            json={},
+            timeout=self.timeout,
+        )
+        if response.status_code == 429:
+            raise requests.HTTPError(
+                "Rate limit exceeded (120 req/60s). Please wait before retrying.",
+                response=response,
+            )
+        response.raise_for_status()
+        return response.status_code
+
+    def filter_subscribers(
+        self,
+        payload: dict[str, Any],
+        per_page: int = 500,
+        after: str | None = None,
+    ) -> dict[str, Any]:
+        params: dict[str, Any] = {"per_page": per_page}
+        if after:
+            params["after"] = after
+        return self._post("/subscribers/filter", payload=payload, params=params)
 
     def add_subscriber_to_sequence(self, sequence_id: int | str, email_address: str) -> dict[str, Any]:
         return self._post(

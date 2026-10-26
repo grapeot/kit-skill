@@ -112,7 +112,7 @@ def test_sequence_subscribers_passes_status(monkeypatch) -> None:
 def test_add_subscriber_to_sequence_posts_email(monkeypatch) -> None:
     captured = {}
 
-    def fake_post(url, headers=None, json=None, timeout=None):
+    def fake_post(url, headers=None, json=None, params=None, timeout=None):
         captured["url"] = url
         captured["json"] = json
         captured["content_type"] = headers.get("Content-Type")
@@ -129,7 +129,7 @@ def test_add_subscriber_to_sequence_posts_email(monkeypatch) -> None:
 
 
 def test_post_raises_on_rate_limit(monkeypatch) -> None:
-    def fake_post(url, headers=None, json=None, timeout=None):
+    def fake_post(url, headers=None, json=None, params=None, timeout=None):
         return _FakeResponse(status_code=429)
 
     monkeypatch.setattr(requests, "post", fake_post)
