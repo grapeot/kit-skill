@@ -8,7 +8,7 @@ This project extracts both workflows into a reusable CLI while keeping write ope
 
 ## Scope
 
-The skill covers broadcast publishing plus read-only analytics. Subscriber import, tag creation, form automation, visual automation setup, custom unsubscribe link setup, and background syncing remain out of scope.
+The skill covers broadcast publishing, read-only analytics, and limited subscriber state management. Subscriber import, tag creation, form automation, visual automation setup, custom unsubscribe link setup, and background syncing remain out of scope. Subscriber consent mutations are limited to single-address operations: batch unsubscribe, resubscribe, and import are out of scope.
 
 ## CLI Contract
 
@@ -54,6 +54,37 @@ kit-skill analytics snapshot [--start-date YYYY-MM-DD] [--end-date YYYY-MM-DD] [
 ```
 
 `analytics subscribers` and `analytics sequence --include-subscribers` redact email addresses by default. `--show-emails` is an explicit private-output opt-in.
+
+## Subscriber State Management
+
+Consent-revoking single-address operations on subscriber state:
+
+```bash
+kit-skill subscribers show <email> [--show-emails]
+kit-skill subscribers unsubscribe <email> [--execute]
+```
+
+- `unsubscribe` defaults to dry-run: it locates the subscriber by exact email (`GET /v4/subscribers?email_address=...&status=all`, cursor-paginated), re-reads the current record by ID (list reads are eventually consistent; ID reads are strongly consistent), and prints the outcome without writing.
+- Only `active` subscribers proceed to the write; `cancelled` returns `already_cancelled` and other known states return `skipped_non_active`, all without POST and all exit 0.
+- `--execute` creates a pre-write attempt log under `.local/subscription_actions/` (directory 0700, file exclusive-created 0600, filename without PII), refuses to write if that fails, then calls `POST /v4/subscribers/{id}/unsubscribe` and requires HTTP 204 as the only confirmed success signal. The read-back after 204 must report `state=cancelled`; any other read-back is reported as write-succeeded-but-unverified, and the flow never auto-retries the POST.
+- Outcome field values: `dry_run`, `not_found`, `ambiguous`, `already_cancelled`, `skipped_non_active`, `confirmed_cancelled`, `write_succeeded_verification_failed`, `write_outcome_unknown`, `error`. Exit codes: 0 dry-run/expected skip/confirmed; 1 operational failure or unconfirmed write; 2 argument errors.
+- Unsubscribing applies to all future sends on the account, not just a tag. It is consent-revoking and effectively permanent; resubscription is not provided.
+- Inputs are private context: the positional email reaches shell history, process arguments, and agent logs, which are not sanitized by output masking; attempt-log bodies contain the full email and Kit subscriber ID, so never paste them into public issues, fixtures, or commits.
+- Error output is sanitized: status code only; response bodies and query-string URLs are not echoed, including in the generic CLI fallback.
+
+## Bounce Hygiene Scan
+
+Read-only scan of tag members with high account-level bounce counts:
+
+```bash
+kit-skill analytics bounce-hygiene --tag <name|id> --since YYYY-MM-DD [--until YYYY-MM-DD] [--min-bounced 3]
+```
+
+- Request shape: `POST /v4/subscribers/filter` with `all=[{subscriber_state: [active]}, {tags: any ids match}]` and `include=[{stats, range}]`, cursor-paginated via `per_page`/`after` query params (page size default 500, max 1000). The `after` query-parameter support for this endpoint must be verified with a small two-page read-only probe before relying on pagination; a live observation is operator history, not a platform guarantee.
+- `scanned` reports the first page's `total_count` when the server provides it, otherwise the cumulative number of rows seen; document which one you are reading.
+- Output embeds each member's account-level stats (broadcasts, sequences, and templates combined) for the requested window; it is not attributable to the tag alone and is not a hard-bounce verdict. Rows missing `stats` abort the scan. 429 or pagination failures exit nonzero with a scan-incomplete declaration.
+- Inputs are private context: command arguments carry real subscriber emails into shell history, process arguments, and agent invocation logs; default output masking does not sanitize these records, so treat them as private-run artifacts and never paste them into public reports.
+- Emails are redacted by default; `--show-emails` is a private-output opt-in.
 
 ## Draft Semantics
 
@@ -102,3 +133,6 @@ The CLI loads `.env` from the current directory and parent directories. Public e
 - Kit link triggers may not fire for API-created broadcasts unless the API HTML preserves whatever tracking metadata Kit expects. This must be tested separately.
 - Kit draft/public/send behavior should be verified with a non-production account or test broadcast before production cutover.
 - Kit API response envelopes are not completely consistent across endpoints; analytics commands should keep tests around envelope unwrapping and count fallbacks.
+- Repeated unsubscribe POSTs against already-cancelled subscribers are not documented as idempotent; the CLI short-circuits with no-op instead of relying on server behavior.
+- Live write-path verification for the CLI unsubscribe command (POST to a throwaway active subscriber) is not part of the default suite; run only with a separate explicit authorization.
+- Official docs disagree on whether filter stats ranges outside retention return 400 or are clamped; the CLI reports 400s verbatim and does not rely on silent clamping.

@@ -18,6 +18,11 @@ Coverage goals:
 10. Subscriber-count fallback logic.
 11. Subscriber email redaction in CLI output.
 12. Snapshot enrichment with recent broadcast stats.
+13. Subscriber lookup by exact email including pagination and ambiguity/absence verdicts.
+14. Unsubscribe state gating: stale-list protection via consistent ID re-read, identity mismatch aborts, non-active no-ops, dry-run writes nothing.
+15. Unsubscribe write outcomes: 204 plus read-back confirmed, 204 with failed read-back, transport errors, and non-204 responses separated and logged.
+16. Attempt-log creation and permissions (exclusive create, 0600, no PII in filename, 0700 directory).
+17. Bounce-hygiene scan: request shape, cursor pagination, threshold filtering, null-safe ratios, missing-stats abort, redaction, and unknown-tag or reversed-window argument errors.
 
 Run:
 
@@ -29,7 +34,7 @@ Run:
 
 Live tests are skipped unless `KIT_ENABLE_LIVE_TESTS=1`, `KIT_LIVE_SEQUENCE_ID`, and `KIT_LIVE_TEST_EMAIL` are set. They should use throwaway tags, test subscribers, and fake/non-production audience paths only.
 
-Live tests must not send to a real production audience. Prefer `--draft`, read-only analytics commands, and a test tag.
+Live tests must not send to a real production audience. Prefer `--draft`, read-only analytics commands, and a test tag. Consent mutations (`subscribers unsubscribe --execute`) are not part of the automated live suite; a live write-path check for unsubscribe requires its own throwaway active subscriber and a separate explicit authorization.
 
 Run:
 

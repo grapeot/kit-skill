@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
-from datetime import date, timedelta
+import uuid
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -18,6 +20,11 @@ from .config import (
     get_default_template_id,
     get_timeout,
     load_dotenv,
+)
+
+UNSUBSCRIBE_SEMANTICS_NOTE = (
+    "Unsubscribe is consent-revoking and effectively permanent; "
+    "it applies to all future sends on the account, not just the targeted tag."
 )
 
 
@@ -54,6 +61,92 @@ def redact_subscriber_emails(data: Any) -> Any:
         else:
             redacted[key] = redact_subscriber_emails(value)
     return redacted
+
+
+def validate_single_email(value: str) -> str:
+    stripped = value.strip()
+    if stripped.count("@") != 1 or any(ch.isspace() or ch == "," for ch in stripped):
+        raise ValueError("Expected a single bare email address (one '@', no spaces or commas)")
+    return stripped
+
+
+class PaginationError(Exception):
+    pass
+
+
+def locate_subscriber_by_email(client: KitClient, email: str) -> list[dict[str, Any]]:
+    matches: list[dict[str, Any]] = []
+    after: str | None = None
+    seen_cursors: set[str] = set()
+    while True:
+        data = client.find_subscribers_by_email(email, after=after)
+        for row in data.get("subscribers", []):
+            if str(row.get("email_address", "")).lower() == email.lower():
+                matches.append(row)
+        if len(matches) > 1:
+            return matches
+        pagination = data.get("pagination") or {}
+        if not pagination.get("has_next_page"):
+            return matches
+        cursor = pagination.get("end_cursor")
+        if not cursor or str(cursor) in seen_cursors:
+            raise PaginationError("pagination ended without a fresh cursor; results may be incomplete")
+        seen_cursors.add(str(cursor))
+        after = cursor
+
+
+def subscription_log_dir() -> Path:
+    return Path(__file__).resolve().parents[2] / ".local" / "subscription_actions"
+
+
+def create_attempt_log(subscriber_id: int | str, email: str) -> Path:
+    log_dir = subscription_log_dir()
+    log_dir.mkdir(parents=True, exist_ok=True)
+    os.chmod(log_dir, 0o700)
+    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+    body = json.dumps(
+        {
+            "created_at_utc": datetime.now(UTC).isoformat(),
+            "subscriber_id": subscriber_id,
+            "email": email,
+            "phase": "pre_write",
+        },
+        ensure_ascii=False,
+        indent=2,
+    )
+    for _ in range(3):
+        path = log_dir / f"{stamp}-{uuid.uuid4().hex[:12]}.json"
+        try:
+            fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+        except FileExistsError:
+            continue
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(body)
+        return path
+    raise RuntimeError("Unable to create subscription attempt log")
+
+
+def update_attempt_log(path: Path | None, record: dict[str, Any]) -> bool:
+    if path is None:
+        return False
+    try:
+        existing = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+        existing.update(record)
+        path.write_text(json.dumps(existing, ensure_ascii=False, indent=2), encoding="utf-8")
+        os.chmod(path, 0o600)
+        return True
+    except (OSError, ValueError):
+        print("Warning: subscription attempt log update failed", file=sys.stderr)
+        return False
+
+
+def print_sanitized_http_error(exc: requests.HTTPError) -> None:
+    status = exc.response.status_code if exc.response is not None else None
+    print(f"HTTP {status}" if status else "HTTP error", file=sys.stderr)
+
+
+def print_sanitized_transport_error(exc: requests.RequestException) -> None:
+    print(f"{type(exc).__name__}: transport error", file=sys.stderr)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -93,6 +186,23 @@ def build_parser() -> argparse.ArgumentParser:
     stats.add_argument("broadcast_id", help="Broadcast ID")
     stats.add_argument("--format", choices=["text", "json"], default="text")
 
+    subscribers_group = sub.add_parser("subscribers", help="Subscriber lookup and consent mutations")
+    subscribers_sub = subscribers_group.add_subparsers(dest="subscribers_cmd", required=True)
+
+    show = subscribers_sub.add_parser("show", help="Read one subscriber by exact email address")
+    show.add_argument("email", help="Exact email address (single bare address)")
+    show.add_argument("--show-emails", action="store_true", help="Print the raw subscriber email")
+    show.add_argument("--format", choices=["text", "json"], default="json")
+
+    unsubscribe = subscribers_sub.add_parser(
+        "unsubscribe",
+        help="Unsubscribe one subscriber (consent-revoking, account-wide, effectively permanent)",
+    )
+    unsubscribe.add_argument("email", help="Exact email address (single bare address)")
+    unsubscribe.add_argument("--execute", action="store_true", help="Actually unsubscribe; default is dry-run")
+    unsubscribe.add_argument("--show-emails", action="store_true", help="Print the raw subscriber email")
+    unsubscribe.add_argument("--format", choices=["text", "json"], default="json")
+
     analytics = sub.add_parser("analytics", help="Read-only analytics and subscriber metrics")
     analytics_sub = analytics.add_subparsers(dest="analytics_cmd", required=True)
 
@@ -109,7 +219,13 @@ def build_parser() -> argparse.ArgumentParser:
 
     subscriber_count = analytics_sub.add_parser("subscriber-count", help="Active subscriber count")
     subscriber_count.add_argument("--status", default="active")
+    subscriber_count.add_argument(
+        "--tag", help="Count subscribers with this tag name or id instead of the whole account"
+    )
     subscriber_count.add_argument("--format", choices=["text", "json"], default="text")
+
+    tags = analytics_sub.add_parser("tags", help="List tags")
+    tags.add_argument("--format", choices=["text", "json"], default="text")
 
     subscribers = analytics_sub.add_parser("subscribers", help="Subscriber list or count")
     subscribers.add_argument("--status", default="active")
@@ -125,6 +241,18 @@ def build_parser() -> argparse.ArgumentParser:
     analytics_broadcast_stats = analytics_sub.add_parser("broadcast-stats", help="Stats for one broadcast")
     analytics_broadcast_stats.add_argument("broadcast_id", help="Broadcast ID")
     analytics_broadcast_stats.add_argument("--format", choices=["text", "json"], default="json")
+
+    hygiene = analytics_sub.add_parser(
+        "bounce-hygiene",
+        help="Find members of a tag with high account-level bounce counts in a stats window",
+    )
+    hygiene.add_argument("--tag", required=True, help="Tag name or numeric id to scan")
+    hygiene.add_argument("--since", required=True, help="Stats window start (YYYY-MM-DD, inclusive of retention rules)")
+    hygiene.add_argument("--until", help="Stats window end (YYYY-MM-DD); defaults to today")
+    hygiene.add_argument("--min-bounced", type=int, default=3, help="Candidate threshold on bounced count")
+    hygiene.add_argument("--per-page", type=int, default=500, help="Filter page size (max 1000)")
+    hygiene.add_argument("--show-emails", action="store_true", help="Print raw subscriber emails")
+    hygiene.add_argument("--format", choices=["text", "json"], default="json")
 
     sequences = analytics_sub.add_parser("sequences", help="List email sequences")
     sequences.add_argument("--limit", type=int, default=50)
@@ -252,6 +380,348 @@ def handle_broadcast_stats(args: argparse.Namespace, format_name: str) -> int:
     return 0
 
 
+def _resolved_subscriber(client: KitClient, email: str, format_name: str) -> tuple[dict[str, Any] | None, int]:
+    try:
+        matches = locate_subscriber_by_email(client, email)
+    except PaginationError as exc:
+        print(f"Locate incomplete: {exc}", file=sys.stderr)
+        return None, 1
+    except requests.HTTPError as exc:
+        print_sanitized_http_error(exc)
+        return None, 1
+    except requests.RequestException as exc:
+        print_sanitized_transport_error(exc)
+        return None, 1
+    if len(matches) != 1:
+        outcome = "not_found" if not matches else "ambiguous"
+        print_json({"outcome": outcome, "email_address": redact_email(email)})
+        return None, 0
+    return matches[0], 0
+
+
+def _fresh_subscriber(client: KitClient, subscriber_id: int | str) -> dict[str, Any] | None:
+    try:
+        return client.get_subscriber(subscriber_id)
+    except requests.HTTPError as exc:
+        print_sanitized_http_error(exc)
+        return None
+    except requests.RequestException as exc:
+        print_sanitized_transport_error(exc)
+        return None
+
+
+def _outcome_record(
+    email: str,
+    row: dict[str, Any],
+    outcome: str,
+    extra: dict[str, Any] | None = None,
+    show_email: bool = False,
+) -> dict[str, Any]:
+    data = {
+        "outcome": outcome,
+        "subscriber_id": row.get("id"),
+        "email_address": row.get("email_address") if show_email else redact_email(row.get("email_address") or email),
+        "state": row.get("state"),
+        "note": UNSUBSCRIBE_SEMANTICS_NOTE,
+    }
+    if extra:
+        data.update(extra)
+    return data
+
+
+def handle_subscribers_show(args: argparse.Namespace, format_name: str) -> int:
+    try:
+        email = validate_single_email(args.email)
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+    client = build_client()
+    row, code = _resolved_subscriber(client, email, format_name)
+    if row is None:
+        return code
+    fresh = _fresh_subscriber(client, row.get("id"))
+    if not isinstance(fresh, dict):
+        return 1
+    if str(fresh.get("id")) != str(row.get("id")) or str(fresh.get("email_address", "")).lower() != email.lower():
+        print("Located subscriber identity mismatch on consistent re-read; aborting", file=sys.stderr)
+        return 1
+    data = {
+        "id": fresh.get("id"),
+        "state": fresh.get("state"),
+        "created_at": fresh.get("created_at"),
+        "email_address": fresh.get("email_address") if args.show_emails else redact_email(fresh.get("email_address")),
+    }
+    print_json(data)
+    return 0
+
+
+def handle_subscribers_unsubscribe(args: argparse.Namespace, format_name: str) -> int:
+    try:
+        email = validate_single_email(args.email)
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+    show_email = bool(args.show_emails)
+    client = build_client()
+    row, code = _resolved_subscriber(client, email, format_name)
+    if row is None:
+        return code
+    subscriber_id = row.get("id")
+    fresh = _fresh_subscriber(client, subscriber_id)
+    if not isinstance(fresh, dict):
+        return 1
+    if str(fresh.get("id")) != str(subscriber_id) or str(
+        fresh.get("email_address", "")
+    ).lower() != email.lower():
+        print_json(
+            _outcome_record(
+                email,
+                {"id": subscriber_id, "email_address": redact_email(email)},
+                "error",
+                {"error": "identity mismatch on consistent re-read; aborting"},
+                show_email=show_email,
+            )
+        )
+        return 1
+    fresh["id"] = subscriber_id
+    fresh["email_address"] = fresh.get("email_address", email)
+    state = fresh.get("state")
+    if state == "active":
+        if not args.execute:
+            print_json(_outcome_record(email, fresh, "dry_run", show_email=show_email))
+            return 0
+    else:
+        if state == "cancelled":
+            outcome = "already_cancelled"
+        elif state in {"inactive", "bounced", "complained"}:
+            outcome = "skipped_non_active"
+        else:
+            print("Unknown or missing subscriber state; refusing to unsubscribe", file=sys.stderr)
+            print_json(_outcome_record(email, fresh, "error", {"error": "unknown or missing state"}, show_email=show_email))
+            return 1
+        print_json(_outcome_record(email, fresh, outcome, show_email=show_email))
+        return 0
+
+    try:
+        attempt_path: Path | None = create_attempt_log(subscriber_id, email)
+    except (OSError, RuntimeError) as exc:
+        print(f"Refusing to unsubscribe: cannot create local attempt log: {type(exc).__name__}", file=sys.stderr)
+        return 1
+    try:
+        status = client.unsubscribe_subscriber(subscriber_id)
+    except requests.RequestException as exc:
+        audit_ok = update_attempt_log(attempt_path, {"outcome": "write_outcome_unknown", "error": type(exc).__name__})
+        print_sanitized_transport_error(exc)
+        print_json(
+            _outcome_record(
+                email,
+                fresh,
+                "write_outcome_unknown",
+                {"error": type(exc).__name__, "attempt_log": str(attempt_path), "attempt_log_status": "updated" if audit_ok else "update_failed"},
+                show_email=show_email,
+            )
+        )
+        return 1
+    if status != 204:
+        audit_ok = update_attempt_log(attempt_path, {"outcome": "write_outcome_unknown", "http_status": status})
+        print(
+            f"Unsubscribe returned HTTP {status} instead of 204; outcome unknown", file=sys.stderr
+        )
+        print_json(
+            _outcome_record(
+                email,
+                fresh,
+                "write_outcome_unknown",
+                {"http_status": status, "attempt_log": str(attempt_path), "attempt_log_status": "updated" if audit_ok else "update_failed"},
+                show_email=show_email,
+            )
+        )
+        return 1
+    after = _fresh_subscriber(client, subscriber_id)
+    if not isinstance(after, dict):
+        audit_ok = update_attempt_log(
+            attempt_path,
+            {"outcome": "write_succeeded_verification_failed", "http_status": status},
+        )
+        print("Unsubscribe accepted but verification read failed; recheck later with subscribers show", file=sys.stderr)
+        print_json(
+            _outcome_record(
+                email,
+                fresh,
+                "write_succeeded_verification_failed",
+                {"http_status": status, "attempt_log": str(attempt_path), "attempt_log_status": "updated" if audit_ok else "update_failed"},
+                show_email=show_email,
+            )
+        )
+        return 1
+    after_state = after.get("state")
+    if after_state == "cancelled":
+        audit_ok = update_attempt_log(
+            attempt_path,
+            {
+                "outcome": "confirmed_cancelled",
+                "state_before": state,
+                "state_after": after_state,
+                "http_status": status,
+                "confirmed_at_utc": datetime.now(UTC).isoformat(),
+            },
+        )
+        print_json(
+            _outcome_record(
+                email,
+                after,
+                "confirmed_cancelled",
+                {
+                    "state_before": state,
+                    "state_after": after_state,
+                    "http_status": status,
+                    "attempt_log": str(attempt_path),
+                    "attempt_log_status": "updated" if audit_ok else "update_failed",
+                },
+                show_email=show_email,
+            )
+        )
+        return 0
+    audit_ok = update_attempt_log(
+        attempt_path,
+        {"outcome": "write_succeeded_verification_failed", "http_status": status, "state_after": after_state},
+    )
+    print(f"Unsubscribe accepted but read-back state is {after_state!r}", file=sys.stderr)
+    print_json(
+        _outcome_record(
+            email,
+            after,
+            "write_succeeded_verification_failed",
+            {
+                "http_status": status,
+                "state_after": after_state,
+                "attempt_log": str(attempt_path),
+                "attempt_log_status": "updated" if audit_ok else "update_failed",
+            },
+            show_email=show_email,
+        )
+    )
+    return 1
+
+
+def handle_analytics_bounce_hygiene(args: argparse.Namespace, format_name: str) -> int:
+    try:
+        since = date.fromisoformat(str(args.since))
+        until = date.fromisoformat(str(args.until)) if args.until else date.today()
+    except ValueError:
+        print("--since/--until must be YYYY-MM-DD dates", file=sys.stderr)
+        return 2
+    if since >= until:
+        print("--since must be earlier than --until", file=sys.stderr)
+        return 2
+    per_page = min(int(args.per_page), 1000)
+    client = build_client()
+    tag_input = str(args.tag)
+    try:
+        tag_id: int | str
+        if tag_input.isdigit():
+            tag_id = int(tag_input)
+        else:
+            tags_data = client.list_tags()
+            matching = [
+                tag
+                for tag in tags_data.get("tags", [])
+                if str(tag.get("name", "")).lower() == tag_input.lower() and tag.get("id") is not None
+            ]
+            if len(matching) != 1:
+                print(f"Tag not found or ambiguous: {tag_input!r}", file=sys.stderr)
+                return 2
+            tag_id = matching[0]["id"]
+        payload = {
+            "all": [
+                {"type": "subscriber_state", "states": ["active"]},
+                {"type": "tags", "any": [{"type": "ids", "matching": [tag_id]}]},
+            ],
+            "include": [
+                {"type": "stats", "range": {"start": since.isoformat(), "end": until.isoformat()}}
+            ],
+        }
+        candidates: list[dict[str, Any]] = []
+        scanned: int | None = None
+        seen = 0
+        after: str | None = None
+        seen_cursors: set[str] = set()
+        while True:
+            data = client.filter_subscribers(payload, per_page=per_page, after=after)
+            page_rows = data.get("subscribers", [])
+            seen += len(page_rows)
+            if scanned is None:
+                total = (data.get("pagination") or {}).get("total_count")
+                if isinstance(total, int):
+                    scanned = total
+            for row in page_rows:
+                stats = row.get("stats")
+                if not isinstance(stats, dict):
+                    print("Subscriber stats missing in filter response; scan aborted", file=sys.stderr)
+                    return 1
+                try:
+                    bounced = int(stats.get("bounced") or 0)
+                    sent = int(stats.get("sent") or 0)
+                    opened = int(stats.get("opened") or 0)
+                    clicked = int(stats.get("clicked") or 0)
+                except (TypeError, ValueError):
+                    print("Invalid stats value in filter response; scan aborted", file=sys.stderr)
+                    return 1
+                if bounced < int(args.min_bounced):
+                    continue
+                candidates.append(
+                    {
+                        "id": row.get("id"),
+                        "created_at": row.get("created_at"),
+                        "email_address": row.get("email_address")
+                        if args.show_emails
+                        else redact_email(row.get("email_address")),
+                        "stats": {
+                            "sent": sent,
+                            "opened": opened,
+                            "clicked": clicked,
+                            "bounced": bounced,
+                            "last_sent": stats.get("last_sent"),
+                        },
+                        "bounce_ratio": (bounced / sent) if sent else None,
+                    }
+                )
+            pagination = data.get("pagination") or {}
+            if not pagination.get("has_next_page"):
+                break
+            cursor = pagination.get("end_cursor")
+            if not cursor or str(cursor) in seen_cursors:
+                raise PaginationError("pagination ended without a fresh cursor; scan is incomplete")
+            seen_cursors.add(str(cursor))
+            after = cursor
+    except PaginationError as exc:
+        print(f"Scan incomplete: {exc}", file=sys.stderr)
+        return 1
+    except requests.HTTPError as exc:
+        print_sanitized_http_error(exc)
+        print("Scan incomplete; treating result as unreliable", file=sys.stderr)
+        return 1
+    except requests.RequestException as exc:
+        print_sanitized_transport_error(exc)
+        print("Scan incomplete; treating result as unreliable", file=sys.stderr)
+        return 1
+    candidates.sort(key=lambda item: item["stats"]["bounced"], reverse=True)
+    if scanned is None:
+        scanned = seen
+    output = {
+        "tag": tag_input,
+        "requested_states": ["active"],
+        "window": {"start": since.isoformat(), "end": until.isoformat()},
+        "scanned": scanned,
+        "min_bounced": int(args.min_bounced),
+        "candidates": candidates,
+        "note": "Account-level email stats for current tag members; for manual investigation only. "
+        "High bounce counts are not hard-bounce verdicts or auto-unsubscribe grounds.",
+    }
+    print_json(output)
+    return 0
+
+
 def handle_analytics(args: argparse.Namespace, format_name: str) -> int:
     client = build_client()
     default_start, default_end = default_date_range()
@@ -265,11 +735,21 @@ def handle_analytics(args: argparse.Namespace, format_name: str) -> int:
     elif args.analytics_cmd == "email-stats":
         data = client.email_stats()
     elif args.analytics_cmd == "subscriber-count":
-        count = client.subscriber_count(status=args.status)
-        data = {"status": args.status, "count": count}
+        if args.tag:
+            count = client.tag_subscriber_count(args.tag, status=args.status)
+            data = {"tag": args.tag, "status": args.status, "count": count}
+        else:
+            count = client.subscriber_count(status=args.status)
+            data = {"status": args.status, "count": count}
         if format_name == "text":
             print(count)
             return 0
+    elif args.analytics_cmd == "tags":
+        raw = client.list_tags().get("tags", [])
+        data = [
+            {"id": tag.get("id"), "name": tag.get("name"), "created_at": tag.get("created_at")}
+            for tag in raw
+        ]
     elif args.analytics_cmd == "subscribers":
         if args.count:
             count = client.subscriber_count(status=args.status)
@@ -353,19 +833,21 @@ def main(argv: list[str] | None = None) -> int:
             return handle_broadcast_send(args, args.format)
         if args.cmd == "broadcast" and args.broadcast_cmd == "stats":
             return handle_broadcast_stats(args, args.format)
+        if args.cmd == "subscribers" and args.subscribers_cmd == "show":
+            return handle_subscribers_show(args, args.format)
+        if args.cmd == "subscribers" and args.subscribers_cmd == "unsubscribe":
+            return handle_subscribers_unsubscribe(args, args.format)
         if args.cmd == "analytics":
+            if args.analytics_cmd == "bounce-hygiene":
+                return handle_analytics_bounce_hygiene(args, args.format)
             return handle_analytics(args, args.format)
         parser.print_help()
         return 1
     except requests.HTTPError as exc:
-        response = exc.response
-        if response is not None:
-            print(f"HTTP {response.status_code}: {response.text}", file=sys.stderr)
-        else:
-            print(f"HTTP error: {exc}", file=sys.stderr)
+        print_sanitized_http_error(exc)
         return 1
     except requests.RequestException as exc:
-        print(f"Request failed: {exc}", file=sys.stderr)
+        print_sanitized_transport_error(exc)
         return 1
     except ValueError as exc:
         print(str(exc), file=sys.stderr)

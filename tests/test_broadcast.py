@@ -3,7 +3,11 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from kit_skill.broadcast import BroadcastOptions, build_broadcast_payload, build_subscriber_filter
+from kit_skill.broadcast import (
+    BroadcastOptions,
+    build_broadcast_payload,
+    build_subscriber_filter,
+)
 
 
 def _sample_md(tmp_path: Path) -> Path:
