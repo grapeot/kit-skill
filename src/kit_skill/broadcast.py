@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Literal
 
@@ -57,7 +57,7 @@ def build_broadcast_payload(markdown_path: Path, options: BroadcastOptions) -> d
     description = options.description or subject
     html_content = md_to_html(markdown, title=subject)
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     public = options.publish
     if options.draft:
         public = False

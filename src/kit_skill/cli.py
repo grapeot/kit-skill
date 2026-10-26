@@ -5,7 +5,7 @@ import json
 import os
 import sys
 import uuid
-from datetime import date, datetime, timedelta, timezone
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -103,10 +103,10 @@ def create_attempt_log(subscriber_id: int | str, email: str) -> Path:
     log_dir = subscription_log_dir()
     log_dir.mkdir(parents=True, exist_ok=True)
     os.chmod(log_dir, 0o700)
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     body = json.dumps(
         {
-            "created_at_utc": datetime.now(timezone.utc).isoformat(),
+            "created_at_utc": datetime.now(UTC).isoformat(),
             "subscriber_id": subscriber_id,
             "email": email,
             "phase": "pre_write",
@@ -135,7 +135,7 @@ def update_attempt_log(path: Path | None, record: dict[str, Any]) -> bool:
         path.write_text(json.dumps(existing, ensure_ascii=False, indent=2), encoding="utf-8")
         os.chmod(path, 0o600)
         return True
-    except Exception:
+    except (OSError, ValueError):
         print("Warning: subscription attempt log update failed", file=sys.stderr)
         return False
 
@@ -504,7 +504,7 @@ def handle_subscribers_unsubscribe(args: argparse.Namespace, format_name: str) -
 
     try:
         attempt_path: Path | None = create_attempt_log(subscriber_id, email)
-    except Exception as exc:
+    except (OSError, RuntimeError) as exc:
         print(f"Refusing to unsubscribe: cannot create local attempt log: {type(exc).__name__}", file=sys.stderr)
         return 1
     try:
@@ -563,7 +563,7 @@ def handle_subscribers_unsubscribe(args: argparse.Namespace, format_name: str) -
                 "state_before": state,
                 "state_after": after_state,
                 "http_status": status,
-                "confirmed_at_utc": datetime.now(timezone.utc).isoformat(),
+                "confirmed_at_utc": datetime.now(UTC).isoformat(),
             },
         )
         print_json(

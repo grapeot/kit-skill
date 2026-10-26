@@ -6,8 +6,8 @@ import os
 import pytest
 import requests
 
-from kit_skill.client import KitClient
 from kit_skill.cli import main, redact_email
+from kit_skill.client import KitClient
 
 
 class _FakeResponse:

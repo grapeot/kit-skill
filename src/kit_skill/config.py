@@ -3,7 +3,6 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-
 DEFAULT_BASE_URL = "https://api.kit.com/v4"
 DEFAULT_TIMEOUT = 30
 

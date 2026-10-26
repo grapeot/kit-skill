@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import re
 
-
 CSS_STYLES = """
 <style>
 body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; background: #f6f8fa; color: #24292f; line-height: 1.6; }

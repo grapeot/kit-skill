@@ -5,7 +5,7 @@ import stat
 
 import requests
 
-import kit_skill.cli as cli
+from kit_skill import cli
 from kit_skill.cli import main
 
 
@@ -68,7 +68,7 @@ def test_show_masks_emails_and_whitelists_fields(monkeypatch, capsys) -> None:
     _env(monkeypatch)
 
     def fake_get(url, headers=None, params=None, timeout=None):
-        assert url.endswith("/subscribers") or url.endswith("/subscribers/404")
+        assert url.endswith(("/subscribers", "/subscribers/404"))
         if url.endswith("/subscribers"):
             assert params["email_address"] == EMAIL
             assert params["status"] == "all"
